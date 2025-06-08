@@ -1,0 +1,321 @@
+package main
+
+import (
+	"fmt"
+	"log"
+	"net/http"
+	"net/url"
+	"strings"
+
+	"github.com/PuerkitoBio/goquery"
+)
+
+func main() {
+	url := "https://www.linkedin.com/jobs/search/?currentJobId=4078411827&distance=25&geoId=102478259&keywords=web%20developer&origin=JOB_SEARCH_PAGE_SEARCH_BUTTON&refresh=true"
+
+	resp, err := http.Get(url)
+	if err != nil {
+		log.Fatalf("error fetch the page: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Fatalf("error status code %d", resp.StatusCode)
+	}
+
+	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	if err != nil {
+		log.Fatalf("error parsing html: %v", err)
+	}
+	// urlPattern := `^https://universitasmandiri\.ac\.id/view-\d+-[a-zA-Z0-9-]+\.html$`
+	// regex := regexp.MustCompile(urlPattern)
+	count := 1
+	doc.Find("a").Each(func(i int, s *goquery.Selection) {
+		link, exsists := s.Attr("href")
+		// title := s.Find("b.post-title a" + " ").Text()
+		// company := s.Find("").Text()
+		// location := s.Find("").Text()
+		// link, _ := s.Find("").Attr("href")
+		if exsists {
+			if isLinkedInJobLink(link) {
+				fmt.Printf("url found: %d %s\n", count, link)
+				count++
+			}
+		}
+
+		// fmt.Printf("Job %d:\n", i+1)
+		// fmt.Printf("  Title: %s\n", strings.TrimSpace(title))
+		// fmt.Printf("  Company: %s\n", strings.TrimSpace(company))
+		// fmt.Printf("  Location: %s\n", strings.TrimSpace(location))
+		// fmt.Printf("  Link: %s\n\n", link)
+	})
+}
+
+func isLinkedInJobLink(link string) bool {
+	parsedURL, err := url.Parse(link)
+	if err != nil {
+		return false
+	}
+
+	// Periksa domain dan path
+	if strings.Contains(parsedURL.Host, "linkedin.com") && strings.HasPrefix(parsedURL.Path, "/jobs/view/") {
+		return true
+	}
+	return false
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+package main
+
+import (
+	"bufio"
+	"encoding/csv"
+	"fmt"
+	"log"
+	"net/http"
+	"net/url"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/PuerkitoBio/goquery"
+	"github.com/mbndr/figlet4go"
+)
+
+func main() {
+	ascii := figlet4go.NewAsciiRender()
+	options := figlet4go.NewRenderOptions()
+	options.FontColor = []figlet4go.Color{
+		figlet4go.ColorRed,
+	}
+	renderStr, _ := ascii.RenderOpts("LinkedIn Scrapper", options)
+	fmt.Print(renderStr)
+	fmt.Print("tools by: Wolfgang\n")
+
+	reader := bufio.NewReader(os.Stdin)
+
+	fmt.Print("Input URL: ")
+	inputURL, _ := reader.ReadString('\n')
+	inputURL = strings.TrimSpace(inputURL)
+
+	fmt.Print("Selector / Tag: ")
+	selector, _ := reader.ReadString('\n')
+	selector = strings.TrimSpace(selector)
+
+	// Pilihan metode scraping
+	fmt.Print("Pilih metode (1 - Manipulasi Parameter, 2 - Header Lengkap): ")
+	methodChoice, _ := reader.ReadString('\n')
+	methodChoice = strings.TrimSpace(methodChoice)
+
+	var allLinks []string
+
+	if methodChoice == "1" {
+		// Metode 1: Manipulasi Parameter Pagination
+		allLinks = scrapeWithPagination(inputURL, selector)
+	} else if methodChoice == "2" {
+		// Metode 2: Menggunakan Header Lengkap
+		allLinks = scrapeWithHeaders(inputURL, selector)
+	} else {
+		log.Fatalf("Pilihan tidak valid")
+	}
+
+	if len(allLinks) == 0 {
+		fmt.Println("no URLs found")
+		return
+	}
+
+	fmt.Print("export to CSV?(y/n): ")
+	exportChoice, _ := reader.ReadString('\n')
+	exportChoice = strings.TrimSpace(strings.ToLower(exportChoice))
+
+	if exportChoice == "y" {
+		err := writeCSV(allLinks)
+		if err != nil {
+			log.Fatalf("failed convert CSV %v", err)
+		}
+	}
+}
+
+// Metode 1: Manipulasi parameter pagination
+func scrapeWithPagination(baseURL, selector string) []string {
+	var allLinks []string
+	count := 1
+
+	// Pastikan URL memiliki parameter yang benar untuk pagination
+	if !strings.Contains(baseURL, "start=") {
+		if strings.Contains(baseURL, "?") {
+			baseURL += "&"
+		} else {
+			baseURL += "?"
+		}
+	}
+
+	for start := 0; start < 1000; start += 25 {
+		pageURL := fmt.Sprintf("%sstart=%d", baseURL, start)
+		fmt.Printf("Fetching page %d...\n", start/25+1)
+
+		resp, err := http.Get(pageURL)
+		if err != nil {
+			log.Printf("Error fetching page %d: %v", start, err)
+			continue
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			log.Printf("Error status code %d on page %d", resp.StatusCode, start)
+			break
+		}
+
+		doc, err := goquery.NewDocumentFromReader(resp.Body)
+		if err != nil {
+			log.Printf("Error parsing page %d: %v", start, err)
+			continue
+		}
+
+		var pageLinks []string
+		doc.Find(selector).Each(func(i int, s *goquery.Selection) {
+			link, exists := s.Attr("href")
+			if exists && isLinkedInJobLink(link) {
+				fullLink := ensureFullURL(link, "https://www.linkedin.com")
+				fmt.Printf("url found: %d | %s\n", count, fullLink)
+				pageLinks = append(pageLinks, fullLink)
+				count++
+			}
+		})
+
+		if len(pageLinks) == 0 {
+			fmt.Println("No more results found")
+			break
+		}
+
+		allLinks = append(allLinks, pageLinks...)
+		time.Sleep(3 * time.Second) // Delay untuk menghindari blocking
+	}
+
+	return allLinks
+}
+
+// Metode 2: Menggunakan header lengkap
+func scrapeWithHeaders(baseURL, selector string) []string {
+	var allLinks []string
+	count := 1
+	client := &http.Client{}
+
+	for start := 0; start < 1000; start += 25 {
+		pageURL := baseURL
+		if strings.Contains(pageURL, "?") {
+			pageURL += "&"
+		} else {
+			pageURL += "?"
+		}
+		pageURL += fmt.Sprintf("start=%d", start)
+
+		fmt.Printf("Fetching page %d with headers...\n", start/25+1)
+
+		req, err := http.NewRequest("GET", pageURL, nil)
+		if err != nil {
+			log.Printf("Error creating request: %v", err)
+			continue
+		}
+
+		// Set header yang lebih lengkap
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
+		req.Header.Set("Accept-Language", "en-US,en;q=0.5")
+		req.Header.Set("Referer", "https://www.linkedin.com/jobs/")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("Error fetching page %d: %v", start, err)
+			continue
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			log.Printf("Error status code %d on page %d", resp.StatusCode, start)
+			break
+		}
+
+		doc, err := goquery.NewDocumentFromReader(resp.Body)
+		if err != nil {
+			log.Printf("Error parsing page %d: %v", start, err)
+			continue
+		}
+
+		var pageLinks []string
+		doc.Find(selector).Each(func(i int, s *goquery.Selection) {
+			link, exists := s.Attr("href")
+			if exists && isLinkedInJobLink(link) {
+				fullLink := ensureFullURL(link, "https://www.linkedin.com")
+				fmt.Printf("url found: %d | %s\n", count, fullLink)
+				pageLinks = append(pageLinks, fullLink)
+				count++
+			}
+		})
+
+		if len(pageLinks) == 0 {
+			fmt.Println("No more results found")
+			break
+		}
+
+		allLinks = append(allLinks, pageLinks...)
+		time.Sleep(3 * time.Second) // Delay untuk menghindari blocking
+	}
+
+	return allLinks
+}
+
+func isLinkedInJobLink(link string) bool {
+	parsedURL, err := url.Parse(link)
+	if err != nil {
+		return false
+	}
+
+	if strings.Contains(parsedURL.Host, "linkedin.com") && strings.HasPrefix(parsedURL.Path, "/jobs/view/") {
+		return true
+	}
+	if strings.HasPrefix(link, "/jobs/view/") {
+		return true
+	}
+	return false
+}
+
+// Fungsi untuk memastikan URL lengkap
+func ensureFullURL(link, base string) string {
+	if strings.HasPrefix(link, "http") {
+		return link
+	}
+	if strings.HasPrefix(link, "/") {
+		return base + link
+	}
+	return base + "/" + link
+}
+
+func writeCSV(data []string) error {
+	file, err := os.Create("output.csv")
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	writer := csv.NewWriter(file)
+	defer writer.Flush()
+
+	writer.Write([]string{"no", "linkedin URL"})
+	for i, url := range data {
+		writer.Write([]string{fmt.Sprintf("%d", i+1), url})
+	}
+	return nil
+}
